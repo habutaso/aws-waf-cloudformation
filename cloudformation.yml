@@ -1,0 +1,146 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Resources:
+  S3BucketForWafLog:
+    Type: "AWS::S3::Bucket"
+    Properties:
+      BucketName: "aws-waf-logs-my-waf-bucket-102937"
+      AccessControl: Private
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  IPSet:
+    Type: "AWS::WAFv2::IPSet"
+    Properties:
+      Scope: "REGIONAL"
+      Name: "MyIPSet"
+      IPAddressVersion: "IPV4"
+      Addresses:
+        - "60.124.16.0/20"
+  
+  WafAllowIPRuleACL:
+    Type: "AWS::WAFv2::WebACL"
+    Properties:
+      Name: "MyAllowIPRuleACL"
+      Scope: "REGIONAL"
+      DefaultAction:
+        Allow: {}
+      VisibilityConfig:
+        CloudWatchMetricsEnabled: true
+        SampledRequestsEnabled: true
+        MetricName: IPRuleACL
+      Rules:
+        - Name: allow-ip
+          Priority: 0
+          Action:
+            Block: {}
+          Statement:
+            NotStatement:
+              Statement:
+                IPSetReferenceStatement:
+                  Arn: !GetAtt IPSet.Arn
+          VisibilityConfig:
+            CloudWatchMetricsEnabled: true
+            SampledRequestsEnabled: true
+            MetricName: IPRule
+
+  WafWebACL:
+    Type: "AWS::WAFv2::WebACL"
+    Properties:
+      Name: "MyWAFWebACL"
+      Scope: "REGIONAL"
+      DefaultAction:
+        Allow: {}
+      VisibilityConfig:
+        SampledRequestsEnabled: true
+        CloudWatchMetricsEnabled: true
+        MetricName: "MyWAFWebACLMetrics"
+      Rules:
+        - Name: "MyRateBasedRule"
+          Priority: 0
+          Action:
+            Block: {}
+          Statement:
+            RateBasedStatement:
+              Limit: 120
+              AggregateKeyType: IP
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: "MyRateBasedRuleMetrics"
+        - Name: "MyRateBasedRulePath"
+          Priority: 1
+          Action:
+            Block: {}
+          Statement:
+            RateBasedStatement:
+              Limit: 100
+              AggregateKeyType: IP
+              ScopeDownStatement:
+                ByteMatchStatement:
+                  FieldToMatch:
+                    UriPath: {}
+                  SearchString: /bad
+                  TextTransformations:
+                    - Priority: 0
+                      Type: NONE
+                  PositionalConstraint: EXACTLY
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: "MyRateBasedRuleMetrics"
+
+  WebACLAssociation:
+    Type: "AWS::WAFv2::WebACLAssociation"
+    Properties:
+      ResourceArn: "arn:aws:apigateway:us-east-1::/restapis/s0kygqy8xj/stages/v1"
+      WebACLArn: !GetAtt WafWebACL.Arn
+  
+  IPSetAssociation:
+    Type: "AWS::WAFv2::WebACLAssociation"
+    Properties:
+      ResourceArn: "arn:aws:apigateway:us-east-1::/restapis/d5zub1742i/stages/v1"
+      WebACLArn: !GetAtt WafAllowIPRuleACL.Arn
+  
+  WafLogConfig:
+    Type: "AWS::WAFv2::LoggingConfiguration"
+    Properties:
+      LogDestinationConfigs:
+        - !GetAtt S3BucketForWafLog.Arn
+      ResourceArn: !GetAtt WafWebACL.Arn
+
+  
+  SNSTopic:
+    Type: "AWS::SNS::Topic"
+    Properties:
+      TopicName: "MyTopic"
+      Subscription:
+        - Endpoint: habutaso+topic@gmail.com
+          Protocol: email
+
+  HighRateAlarm:
+    Type: "AWS::CloudWatch::Alarm"
+    Properties:
+      # 基本
+      AlarmName: MyWAFAlarm
+
+      # メトリクス
+      MetricName: "MyRateBasedRuleMetrics"
+
+      # 統計
+      Period: 900
+      Statistic: Sum
+
+      # 評価方法
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+
+      # メール通知
+      ActionsEnabled: true
+      AlarmActions:
+        # sns
+        - !GetAtt SNSTopic.Arn
